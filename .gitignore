@@ -1,0 +1,27 @@
+# Unity generated
+/[Ll]ibrary/
+/[Tt]emp/
+/[Oo]bj/
+/[Bb]uild/
+/[Bb]uilds/
+/[Ll]ogs/
+/[Uu]ser[Ss]ettings/
+/[Mm]emoryCaptures/
+*.csproj
+*.sln
+*.slnx
+*.pidb.meta
+*.pdb.meta
+*.mdb.meta
+.vscode/
+.idea/
+
+# Blender backups
+*.blend1
+*.blend2
+
+# Local code index and credentials
+/.tokensave/
+.env
+.env.*
+!.env.example

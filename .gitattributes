@@ -1,0 +1,5 @@
+* text=auto
+
+# Keep large source models and Blender projects out of ordinary Git history.
+*.fbx filter=lfs diff=lfs merge=lfs -text
+*.blend filter=lfs diff=lfs merge=lfs -text
