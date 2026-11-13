@@ -4,13 +4,14 @@ using UnityEngine;
 public class WeaponPickup : MonoBehaviour
 {
     public string displayName = "Assault Rifle";
+    public int weaponSlot = 0;              // index into RifleController.weapons
     public AudioClip landClip;
 
     float lastSound;
 
     public void PickUp(RifleController rifle)
     {
-        rifle.Equip();
+        rifle.Give(weaponSlot);
         Destroy(gameObject);
     }
 

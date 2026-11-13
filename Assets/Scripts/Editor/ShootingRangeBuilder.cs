@@ -4,7 +4,7 @@ using UnityEditor.SceneManagement;
 using UnityEngine;
 
 /// <summary>
-/// Builds the first-person shooting range: a desk with the assault rifle, three lanes with
+/// Builds the first-person shooting range: a desk with the assault rifle and the Glock 19, three lanes with
 /// static, knock-down and moving targets at 10–50 m.
 /// Menu: AI Game > Build Shooting Range
 /// Command line: Unity -batchmode -projectPath . -executeMethod ShootingRangeBuilder.Build -quit
@@ -13,6 +13,9 @@ public static class ShootingRangeBuilder
 {
     const string ScenePath = "Assets/Scenes/ShootingRange.unity";
     const string RiflePath = "Assets/Weapons/AssaultRifle/AssaultRifle.fbx";
+    const string GlockPath = "Assets/Weapons/Glock19/Glock19.fbx";
+    const string GlockTextures = "Assets/Weapons/Glock19/Textures";
+    public const string FPArmsPath = "Assets/Characters/CatGirl/CatGirl_FPArms.fbx";   // ArtSource/CatGirl/scripts/fp_arms.py
     const string Dir = "Assets/Range";
     const int ViewModelLayer = 8;
 
@@ -24,6 +27,8 @@ public static class ShootingRangeBuilder
         Directory.CreateDirectory("Assets/Scenes");
         EnsureLayer(ViewModelLayer, "ViewModel");
         ConfigureRifleImport();
+        ConfigureGlockImport();
+        ConfigureArmsImport();
 
         var scene = EditorSceneManager.NewScene(NewSceneSetup.DefaultGameObjects, NewSceneMode.Single);
         var defaultCam = GameObject.Find("Main Camera");
@@ -80,6 +85,23 @@ public static class ShootingRangeBuilder
             r.AddComponent<WeaponPickup>();
         }
         else Debug.LogError("ShootingRangeBuilder: rifle not found at " + RiflePath);
+        var glockPrefab = AssetDatabase.LoadAssetAtPath<GameObject>(GlockPath);
+        if (glockPrefab != null)
+        {
+            var g = (GameObject)PrefabUtility.InstantiatePrefab(glockPrefab);
+            g.name = "Glock19 (pickup)";
+            g.transform.SetParent(desk);
+            // on its side in front of the rifle, muzzle pointing down range
+            g.transform.rotation = Quaternion.AngleAxis(-25f, Vector3.up) * Quaternion.LookRotation(Vector3.forward, Vector3.left);
+            var b = Bounds(g);
+            Vector3 spot = desk.position + new Vector3(0.5f, 0f, -0.25f);
+            g.transform.position += new Vector3(spot.x - b.center.x, desk.position.y + 0.95f - b.min.y, spot.z - b.center.z);
+            var col = RifleController.AddBoundsCollider(g);
+            col.size = Vector3.Scale(col.size, new Vector3(1.6f, 1.4f, 1.2f));   // easier to look at
+            var pu = g.AddComponent<WeaponPickup>();
+            pu.weaponSlot = 1; pu.displayName = "Glock 19";
+        }
+        else Debug.LogError("ShootingRangeBuilder: Glock not found at " + GlockPath);
 
         // ---------- targets ----------
         var targets = new GameObject("Targets").transform;
@@ -148,15 +170,19 @@ public static class ShootingRangeBuilder
 
         var rifle = player.AddComponent<RifleController>();
         rifle.player = fpc; rifle.mainCamera = cam; rifle.viewModelCamera = vmCam;
-        rifle.weaponRoot = weaponRoot; rifle.riflePrefab = riflePrefab;
-        rifle.shotClips = new[] { Clip("Gunshot_1"), Clip("Gunshot_2"), Clip("Gunshot_3") };
+        rifle.weaponRoot = weaponRoot;
+        var shots = new[] { Clip("Gunshot_1"), Clip("Gunshot_2"), Clip("Gunshot_3") };
+        rifle.weapons = new System.Collections.Generic.List<WeaponProfile> { RifleProfile(riflePrefab, shots), GlockProfile(glockPrefab, shots) };
         rifle.targetHitClip = Clip("TargetHit");
         rifle.impactClip = Clip("Impact");
         rifle.pickupClip = Clip("Pickup");
         // first-person arms: her own arms, hands locked on the grips with IK
-        rifle.armsCharacterPrefab = AssetDatabase.LoadAssetAtPath<GameObject>(CharacterAnimationSetup.ModelPath);
+        // (the CatGirl_FPArms copy has working fingers; without it the character's own rigid-handed arms are used)
+        string armsPath = File.Exists(FPArmsPath) ? FPArmsPath : CharacterAnimationSetup.ModelPath;
+        rifle.armsCharacterPrefab = AssetDatabase.LoadAssetAtPath<GameObject>(armsPath);
+        rifle.armsMaterialSource = AssetDatabase.LoadAssetAtPath<GameObject>(CharacterAnimationSetup.ModelPath);
         rifle.armsController = AssetDatabase.LoadAssetAtPath<RuntimeAnimatorController>(CharacterAnimationSetup.ControllerPath);
-        rifle.armsAvatar = System.Linq.Enumerable.FirstOrDefault(System.Linq.Enumerable.OfType<Avatar>(AssetDatabase.LoadAllAssetsAtPath(CharacterAnimationSetup.ModelPath)));
+        rifle.armsAvatar = System.Linq.Enumerable.FirstOrDefault(System.Linq.Enumerable.OfType<Avatar>(AssetDatabase.LoadAllAssetsAtPath(armsPath)));
         if (rifle.armsController == null) Debug.LogWarning("ShootingRangeBuilder: no animator controller yet – run AI Game > Setup Character Animations for first-person arms");
 
         var hud = player.AddComponent<RangeHUD>();
@@ -185,8 +211,21 @@ public static class ShootingRangeBuilder
         Composite(cam, vm, "Logs/range_desk.png");
         pivot.localRotation = Quaternion.identity;
 
-        // equip a copy of the rifle in the view model slot (edit-mode stand-in for Equip())
-        var gun = (GameObject)Object.Instantiate(rifle.riflePrefab, rifle.weaponRoot);
+        for (int wi = 0; wi < rifle.weapons.Count; wi++) WeaponSnapshots(rifle, rifle.weapons[wi], wi == 0 ? "range" : "range_" + rifle.weapons[wi].displayName.Replace(" ", "").ToLower());
+
+        var over = new GameObject("Overview").AddComponent<Camera>();
+        over.transform.position = new Vector3(0, 14, -10); over.transform.LookAt(new Vector3(0, 0, 25));
+        over.fieldOfView = 60;
+        Composite(over, null, "Logs/range_overview.png");
+        Object.DestroyImmediate(over.gameObject);
+        Debug.Log("ShootingRangeBuilder: snapshots saved");
+    }
+
+    static void WeaponSnapshots(RifleController rifle, WeaponProfile w, string prefix)
+    {
+        var cam = rifle.mainCamera; var vm = rifle.viewModelCamera;
+        // equip a copy of the weapon in the view model slot (edit-mode stand-in for Equip())
+        var gun = (GameObject)Object.Instantiate(w.prefab, rifle.weaponRoot);
         foreach (var t in gun.GetComponentsInChildren<Transform>(true)) t.gameObject.layer = ViewModelLayer;
         foreach (var t in gun.GetComponentsInChildren<Transform>(true))
             if (t.name == "RedDot")
@@ -196,24 +235,35 @@ public static class ShootingRangeBuilder
                 dot.layer = ViewModelLayer; dot.transform.SetParent(t, false); dot.transform.localScale = Vector3.one * 0.0024f;
                 dot.GetComponent<Renderer>().sharedMaterial = FxMaterials.Unlit(Color.red * 3f);
             }
-        gun.transform.localScale = Vector3.one * rifle.gunScale;
+        gun.transform.localScale = Vector3.one * w.scale;
+        Transform slide = null;
+        foreach (var t in gun.GetComponentsInChildren<Transform>(true))
+        {
+            if (t.name == "Slide") slide = t;
+            if (t.name == "GripLeft") t.position += gun.transform.TransformVector(w.leftGripOffset / w.scale);
+        }
         FirstPersonArms arms = null;
         if (rifle.armsCharacterPrefab != null)
         {
-            arms = FirstPersonArms.Spawn(rifle.armsCharacterPrefab, rifle.armsController, rifle.armsAvatar, cam.transform, ViewModelLayer, rifle.armsCharacterHeight, rifle.shoulderPosition);
+            arms = FirstPersonArms.Spawn(rifle.armsCharacterPrefab, rifle.armsController, rifle.armsAvatar, cam.transform, ViewModelLayer, rifle.armsCharacterHeight, rifle.shoulderPosition, rifle.armsMaterialSource);
+            RifleController.ApplyHands(arms, w);
             foreach (var t in gun.GetComponentsInChildren<Transform>(true))
             {
                 if (t.name == "GripRight") arms.gripRight = t;
                 if (t.name == "GripLeft") arms.gripLeft = t;
             }
         }
-        foreach (var (aim, file) in new[] { (0f, "Logs/range_hipfire.png"), (1f, "Logs/range_aim.png") })
+        var shots = new System.Collections.Generic.List<(float, string, float)> { (0f, $"Logs/{prefix}_hipfire.png", 0f), (1f, $"Logs/{prefix}_aim.png", 0f) };
+        if (slide) { shots.Add((0f, $"Logs/{prefix}_hipfire_slideback.png", 1f)); shots.Add((1f, $"Logs/{prefix}_aim_slideback.png", 1f)); }
+        Vector3 slideRest = slide ? slide.localPosition : Vector3.zero;
+        foreach (var (aim, file, slideBack) in shots)
         {
             float s = aim * aim * (3 - 2 * aim);
-            gun.transform.localPosition = Vector3.Lerp(rifle.hipPosition, rifle.aimPosition, s);
-            gun.transform.localRotation = Quaternion.Euler(Vector3.Lerp(rifle.hipRotation, Vector3.zero, s));
-            cam.fieldOfView = Mathf.Lerp(rifle.hipFov, rifle.aimFov, s);
-            vm.fieldOfView = Mathf.Lerp(rifle.viewModelHipFov, rifle.viewModelAimFov, s);
+            gun.transform.localPosition = Vector3.Lerp(w.hipPosition, w.aimPosition, s);
+            gun.transform.localRotation = Quaternion.Euler(Vector3.Lerp(w.hipRotation, Vector3.zero, s));
+            if (slide) slide.position = gun.transform.TransformPoint(gun.transform.InverseTransformPoint(slide.parent.TransformPoint(slideRest)) + Vector3.back * (w.slideTravel * slideBack / w.scale));
+            cam.fieldOfView = Mathf.Lerp(rifle.hipFov, w.aimFov, s);
+            vm.fieldOfView = Mathf.Lerp(w.viewModelHipFov, w.viewModelAimFov, s);
             if (arms)
             {
                 var an = arms.GetComponent<Animator>();
@@ -245,13 +295,6 @@ public static class ShootingRangeBuilder
         }
         if (arms) Object.DestroyImmediate(arms.gameObject);
         Object.DestroyImmediate(gun);
-
-        var over = new GameObject("Overview").AddComponent<Camera>();
-        over.transform.position = new Vector3(0, 14, -10); over.transform.LookAt(new Vector3(0, 0, 25));
-        over.fieldOfView = 60;
-        Composite(over, null, "Logs/range_overview.png");
-        Object.DestroyImmediate(over.gameObject);
-        Debug.Log("ShootingRangeBuilder: snapshots saved");
     }
 
     /// <summary>Renders several hip-fire poses so the framing can be compared (Logs/hip_variant_*.png).</summary>
@@ -270,12 +313,12 @@ public static class ShootingRangeBuilder
         };
         for (int v = 0; v < variants.Length; v++)
         {
-            var gun = (GameObject)Object.Instantiate(rifle.riflePrefab, rifle.weaponRoot);
+            var gun = (GameObject)Object.Instantiate(rifle.weapons[0].prefab, rifle.weaponRoot);
             foreach (var t in gun.GetComponentsInChildren<Transform>(true)) t.gameObject.layer = ViewModelLayer;
-            gun.transform.localScale = Vector3.one * rifle.gunScale;
+            gun.transform.localScale = Vector3.one * rifle.weapons[0].scale;
             gun.transform.localPosition = variants[v].pos;
             gun.transform.localRotation = Quaternion.Euler(variants[v].rot);
-            var arms = FirstPersonArms.Spawn(rifle.armsCharacterPrefab, rifle.armsController, rifle.armsAvatar, cam.transform, ViewModelLayer, rifle.armsCharacterHeight, rifle.shoulderPosition);
+            var arms = FirstPersonArms.Spawn(rifle.armsCharacterPrefab, rifle.armsController, rifle.armsAvatar, cam.transform, ViewModelLayer, rifle.armsCharacterHeight, rifle.shoulderPosition, rifle.armsMaterialSource);
             foreach (var t in gun.GetComponentsInChildren<Transform>(true))
             {
                 if (t.name == "GripRight") arms.gripRight = t;
@@ -502,6 +545,91 @@ public static class ShootingRangeBuilder
             AssetDatabase.ImportAsset(path);
         }
         return AssetDatabase.LoadAssetAtPath<Texture2D>(path);
+    }
+
+    static WeaponProfile RifleProfile(GameObject prefab, AudioClip[] shots) => new WeaponProfile
+    {
+        displayName = "Assault Rifle", prefab = prefab, scale = 0.85f, shotClips = shots,
+    };
+
+    // semi-auto pistol: snappier kick, smaller flash, animated slide
+    static WeaponProfile GlockProfile(GameObject prefab, AudioClip[] shots) => new WeaponProfile
+    {
+        displayName = "Glock 19", prefab = prefab, scale = 1f,
+        automatic = false, roundsPerMinute = 480f,
+        hipSpread = 2.4f, aimSpread = 0.3f, moveSpreadBonus = 1.6f,
+        // held well out with nearly straight arms (narrower view-model FOV keeps its size on screen)
+        aimFov = 55f, viewModelHipFov = 40f, viewModelAimFov = 34f,
+        hipPosition = new Vector3(0.085f, -0.068f, 0.56f), hipRotation = new Vector3(0f, -5f, -4f),
+        aimPosition = new Vector3(0f, 0f, 0.52f),
+        sprintPosition = new Vector3(-0.03f, -0.06f, -0.06f), sprintRotation = new Vector3(32f, -20f, 8f),
+        cameraKick = 2.0f, cameraSideKick = 0.6f, cameraClimb = 0.45f,
+        gunKickBack = 0.035f, gunKickUp = 10f, aimRecoilMultiplier = 0.6f,
+        shotClips = shots, shotVolume = 0.75f, shotPitch = 1.18f, flashScale = 0.65f,
+        slideTravel = 0.03f, barrelTravel = 0.004f, slideBackTime = 0.03f, slideReturnTime = 0.075f,
+        // two-handed thumbs-forward grip: strong hand high on the grip, wrist behind it, hand pointing forward;
+        // support hand on the left panel, its fingers wrapped over the strong hand's fingers
+        rightFingers = new Vector3(0f, 0.15f, 1f), rightPalm = new Vector3(-1f, 0f, 0f), rightElbowHint = new Vector3(0.35f, -0.55f, 0.05f),
+        leftFingers = new Vector3(0.1f, 0.45f, 0.9f), leftPalm = new Vector3(1f, -0.1f, 0f), leftElbowHint = new Vector3(-0.4f, -0.6f, 0.1f),
+        leftGripOffset = new Vector3(-0.008f, 0f, -0.01f),
+        rightCurl = new[] { 5f, 35f, 85f, 90f, 90f },       // thumb, trigger finger, middle, ring, pinky
+        leftCurl = new[] { 0f, 75f, 80f, 80f, 80f },
+        armsHeight = 2.0f,                       // smaller hands than the rifle's stretched arms, the pistol stays visible
+        magazineSize = 15, reloadTime = 1.35f, emptyReloadTime = 1.75f, lockSlideWhenEmpty = true,
+        // placeholder handling sounds from the existing range clips (no recorded pistol foley yet)
+        magOutClip = Clip("Pickup"), magInClip = Clip("Impact"), slideReleaseClip = Clip("Pickup"),
+        mass = 0.7f,
+    };
+
+    /// <summary>Glock 19 (from ArtSource/Weapons/Glock19/glock_prep.py): 4K PBR material, linear data maps.</summary>
+    static void ConfigureGlockImport()
+    {
+        var imp = AssetImporter.GetAtPath(GlockPath) as ModelImporter;
+        if (imp == null) return;
+        foreach (var (name, linear, normal) in new[] { ("BaseColor", false, false), ("Normal", true, true), ("MetallicSmoothness", true, false), ("AO", true, false) })
+        {
+            string tp = $"{GlockTextures}/Glock19_{name}.png";
+            if (!(AssetImporter.GetAtPath(tp) is TextureImporter ti)) continue;
+            bool changed = false;
+            if (normal && ti.textureType != TextureImporterType.NormalMap) { ti.textureType = TextureImporterType.NormalMap; changed = true; }
+            if (linear && ti.sRGBTexture) { ti.sRGBTexture = false; changed = true; }
+            if (ti.maxTextureSize != 4096) { ti.maxTextureSize = 4096; changed = true; }
+            if (ti.anisoLevel < 8) { ti.anisoLevel = 8; changed = true; }
+            if (changed) ti.SaveAndReimport();
+        }
+        string matPath = "Assets/Weapons/Glock19/Glock19.mat";
+        var mat = AssetDatabase.LoadAssetAtPath<Material>(matPath);
+        var shader = UnityEngine.Rendering.GraphicsSettings.currentRenderPipeline != null ? Shader.Find("Universal Render Pipeline/Lit") : Shader.Find("Standard");
+        if (mat == null) { mat = new Material(shader); AssetDatabase.CreateAsset(mat, matPath); }
+        mat.shader = shader;
+        mat.color = Color.white;
+        Texture2D T(string n) => AssetDatabase.LoadAssetAtPath<Texture2D>($"{GlockTextures}/Glock19_{n}.png");
+        mat.SetTexture("_BaseMap", T("BaseColor")); mat.mainTexture = T("BaseColor");
+        mat.SetTexture("_BumpMap", T("Normal")); mat.EnableKeyword("_NORMALMAP");
+        mat.SetTexture("_MetallicGlossMap", T("MetallicSmoothness")); mat.EnableKeyword("_METALLICSPECGLOSSMAP");
+        mat.SetFloat("_Metallic", 1f); mat.SetFloat("_Smoothness", 1f); mat.SetFloat("_GlossMapScale", 1f);
+        mat.SetTexture("_OcclusionMap", T("AO")); mat.SetFloat("_OcclusionStrength", 0.8f); mat.EnableKeyword("_OCCLUSIONMAP");
+        EditorUtility.SetDirty(mat);
+        imp.animationType = ModelImporterAnimationType.None;
+        imp.materialImportMode = ModelImporterMaterialImportMode.ImportStandard;
+        imp.AddRemap(new AssetImporter.SourceAssetIdentifier(typeof(Material), "Glock19"), mat);
+        imp.SaveAndReimport();
+    }
+
+    /// <summary>First-person arms copy: humanoid with the character's own bone mapping, no materials (taken from the character at runtime).</summary>
+    public static void ConfigureArmsImport()
+    {
+        var imp = AssetImporter.GetAtPath(FPArmsPath) as ModelImporter;
+        var src = AssetImporter.GetAtPath(CharacterAnimationSetup.ModelPath) as ModelImporter;
+        if (imp == null || src == null) return;
+        imp.animationType = ModelImporterAnimationType.Human;
+        imp.avatarSetup = ModelImporterAvatarSetup.CreateFromThisModel;
+        imp.humanDescription = src.humanDescription;
+        imp.importAnimation = false;
+        imp.materialImportMode = ModelImporterMaterialImportMode.None;
+        imp.globalScale = src.globalScale;
+        imp.useFileScale = src.useFileScale;
+        imp.SaveAndReimport();
     }
 
     static void ConfigureRifleImport()

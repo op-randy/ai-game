@@ -19,7 +19,8 @@ public static class FxMaterials
             m = new Material(urp);
             m.SetFloat("_Surface", 1f);     // transparent
             m.SetFloat("_Blend", 2f);       // additive
-            m.SetFloat("_SrcBlend", (float)UnityEngine.Rendering.BlendMode.One);
+            // The radial texture stores its fade in alpha, not premultiplied RGB.
+            m.SetFloat("_SrcBlend", (float)UnityEngine.Rendering.BlendMode.SrcAlpha);
             m.SetFloat("_DstBlend", (float)UnityEngine.Rendering.BlendMode.One);
             m.SetFloat("_ZWrite", 0f);
             m.EnableKeyword("_SURFACE_TYPE_TRANSPARENT");

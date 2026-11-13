@@ -1,4 +1,6 @@
-"""Synthesizes the prototype sound effects (no external assets). Run: python3 make_sounds.py <outdir>"""
+"""Legacy synthesized placeholders. Recorded replacements use prepare_range_audio.py; see SOURCES.md.
+Run only into a scratch directory: python3 make_sounds.py <outdir>
+"""
 import math, random, struct, sys, wave
 SR = 44100
 def write(path, samples):

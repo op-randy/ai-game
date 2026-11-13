@@ -1,0 +1,30 @@
+# Shared project context for the lean Claude Code / OpenCode studio adaptation.
+schema_version: 1
+framework:
+  name: Claude Code Game Studios - lean dual-client adaptation
+  version: 1.3.0
+  upstream_commit: abc0de79d6ceb0b5d7aa693945849b3937afbe6a
+project:
+  name: ai-game
+  goal: First-person movement-focused roguelite with stages, XP, run upgrades and skill-tree progression
+  stage: Prototype
+engine:
+  name: Unity
+  version: 6000.6.8f1
+  language: C#
+  code_root: Assets
+  test_root: Assets/Tests
+  render_pipeline: URP 17.6.0
+modes:
+  rigor: minimal
+  automation: collaborative
+studio:
+  scope: project
+  hooks_enabled: false
+  inherit_session_model: true
+  primary_scene: Assets/Scenes/ShootingRange.unity
+  specialists:
+    - studio-unity
+    - studio-gameplay
+    - studio-tech-art
+    - studio-qa

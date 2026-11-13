@@ -25,3 +25,9 @@
 .env
 .env.*
 !.env.example
+
+# Per-developer assistant settings and scratch output
+/project.local.yaml
+/.claude/settings.local.json
+/CLAUDE.local.md
+__pycache__/

@@ -70,23 +70,46 @@ public class FirstPersonController : MonoBehaviour
         recoilKick = Vector2.Lerp(recoilKick, Vector2.zero, 1f - Mathf.Exp(-9f * Time.deltaTime));
         transform.rotation = Quaternion.Euler(0f, yaw + recoilKick.y, 0f);
 
-        // ---- move ----
-        Vector2 input = new Vector2(
-            (Input.GetKey(KeyCode.D) ? 1 : 0) - (Input.GetKey(KeyCode.A) ? 1 : 0),
-            (Input.GetKey(KeyCode.W) ? 1 : 0) - (Input.GetKey(KeyCode.S) ? 1 : 0));
+        UpdateMovement(new MovementInput
+        {
+            move = new Vector2(
+                (Input.GetKey(KeyCode.D) ? 1 : 0) - (Input.GetKey(KeyCode.A) ? 1 : 0),
+                (Input.GetKey(KeyCode.W) ? 1 : 0) - (Input.GetKey(KeyCode.S) ? 1 : 0)),
+            crouchTogglePressed = Input.GetKeyDown(KeyCode.LeftControl),
+            crouchHeld = Input.GetKey(KeyCode.C),
+            crouchPressed = Input.GetKeyDown(KeyCode.C),
+            sprintPressed = Input.GetKeyDown(KeyCode.LeftShift),
+            sprintHeld = Input.GetKey(KeyCode.LeftShift),
+            jumpPressed = Input.GetKeyDown(KeyCode.Space)
+        });
+    }
+
+    // Keep key sampling separate so editor checks can replay the production movement step.
+    struct MovementInput
+    {
+        public Vector2 move;
+        public bool crouchTogglePressed, crouchHeld, crouchPressed;
+        public bool sprintPressed, sprintHeld, jumpPressed;
+    }
+
+    void UpdateMovement(MovementInput controls)
+    {
+        Vector2 input = controls.move;
         Vector3 wish = Vector3.ClampMagnitude(transform.forward * input.y + transform.right * input.x, 1f);
         float flatSpeed = planarVelocity.magnitude;
         bool fastOnGround = controller.isGrounded && flatSpeed > walkSpeed * 0.9f;
 
         // Ctrl toggles crouch (or starts a slide when running); C is hold-to-crouch (or slide when running)
-        if (Input.GetKeyDown(KeyCode.LeftControl))
+        if (controls.crouchTogglePressed)
         {
             if (!IsSliding && fastOnGround) { StartSlide(flatSpeed); crouchToggled = true; }
             else { crouchToggled = !crouchToggled; IsSliding = false; }
         }
-        if (Input.GetKeyDown(KeyCode.C) && !IsSliding && fastOnGround) StartSlide(flatSpeed);
-        if (Input.GetKeyDown(KeyCode.LeftShift)) crouchToggled = false;      // sprinting stands you up
-        bool ctrl = crouchToggled || Input.GetKey(KeyCode.C);
+        if (controls.crouchPressed && !IsSliding && fastOnGround) StartSlide(flatSpeed);
+        if (controls.sprintPressed) crouchToggled = false;      // sprinting stands you up
+        bool ctrl = crouchToggled || controls.crouchHeld;
+        // Resolve blocked stand-up before choosing sprint state and movement speed.
+        IsCrouching = (ctrl && controller.isGrounded) || !CanStandUp();
 
         if (IsSliding)
         {
@@ -99,8 +122,7 @@ public class FirstPersonController : MonoBehaviour
         }
         else
         {
-            IsCrouching = ctrl && controller.isGrounded;
-            IsSprinting = !IsCrouching && Input.GetKey(KeyCode.LeftShift) && input.y > 0 && !isAiming;
+            IsSprinting = !IsCrouching && controls.sprintHeld && input.y > 0 && !isAiming;
             float target = (IsCrouching ? crouchSpeed : IsSprinting ? sprintSpeed : walkSpeed) * (isAiming ? aimSpeedMultiplier : 1f);
             planarVelocity = Vector3.MoveTowards(planarVelocity, wish * target, acceleration * Time.deltaTime);
         }
@@ -108,7 +130,6 @@ public class FirstPersonController : MonoBehaviour
 
         // eye height and collider follow stance; camera rolls a little in a slide
         float eye = IsSliding ? slideEyeHeight : IsCrouching ? crouchEyeHeight : standEyeHeight;
-        if (!IsCrouching && !CanStandUp()) { eye = crouchEyeHeight; IsCrouching = true; }
         if (cameraPivot)
         {
             var lp = cameraPivot.localPosition;
@@ -124,10 +145,12 @@ public class FirstPersonController : MonoBehaviour
         if (controller.isGrounded)
         {
             if (verticalVelocity < 0f) verticalVelocity = -2f;
-            if (Input.GetKeyDown(KeyCode.Space)) { verticalVelocity = Mathf.Sqrt(jumpHeight * -2f * gravity); IsSliding = false; crouchToggled = false; }
+            if (controls.jumpPressed) { verticalVelocity = Mathf.Sqrt(jumpHeight * -2f * gravity); IsSliding = false; crouchToggled = false; }
         }
         verticalVelocity += gravity * Time.deltaTime;
-        controller.Move((planarVelocity + Vector3.up * verticalVelocity) * Time.deltaTime);
+        CollisionFlags collisions = controller.Move((planarVelocity + Vector3.up * verticalVelocity) * Time.deltaTime);
+        // Collision stops the capsule, but Move does not update our stored velocity.
+        if ((collisions & CollisionFlags.Above) != 0 && verticalVelocity > 0f) verticalVelocity = 0f;
 
         if (transform.position.y < -20f)
         {

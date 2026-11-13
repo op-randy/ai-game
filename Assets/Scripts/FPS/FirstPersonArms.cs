@@ -25,6 +25,10 @@ public class FirstPersonArms : MonoBehaviour
     public Vector3 leftRotationOffset = Vector3.zero;
     public Vector3 leftElbowHint = new Vector3(-0.5f, -0.6f, 0.25f);
 
+    [Header("Finger curl in degrees past the rest pose: thumb, index, middle, ring, pinky")]
+    public float[] rightCurl = { 10f, 30f, 75f, 80f, 80f };
+    public float[] leftCurl = { 10f, 70f, 70f, 70f, 70f };
+
     [Tooltip("Distance from the wrist to the middle of the palm, along the fingers")]
     public float palmLength = 0.07f;
     public float palmToGrip = 0.025f;
@@ -39,6 +43,13 @@ public class FirstPersonArms : MonoBehaviour
 
     public bool Calibrated => calibrations >= 2;
 
+    // fingers: bones found by name (the avatar does not map them), each bent about a fixed axis toward the palm
+    static readonly string[] FingerNames = { "Thumb", "Index", "Middle", "Ring", "Pinky" };
+    static readonly string[] JointNames = { "Proximal", "Intermediate", "Distal" };
+    static readonly float[] JointShare = { 0.9f, 1.15f, 0.8f };         // the middle joint bends the most
+    struct FingerJoint { public Transform bone; public Quaternion restLocal; public Vector3 axisInParent; }
+    FingerJoint[] rightJoints, leftJoints;
+
     void OnEnable() => anim = GetComponent<Animator>();
 
     /// <summary>Call while the model is still in its T-pose (before the first animation update).</summary>
@@ -49,6 +60,53 @@ public class FirstPersonArms : MonoBehaviour
         var l = anim.GetBoneTransform(HumanBodyBones.LeftHand);
         restR = Quaternion.Inverse(transform.rotation) * r.rotation;
         restL = Quaternion.Inverse(transform.rotation) * l.rotation;
+        rightJoints = CaptureFingers("Right_", r);
+        leftJoints = CaptureFingers("Left_", l);
+    }
+
+    FingerJoint[] CaptureFingers(string prefix, Transform hand)
+    {
+        var all = GetComponentsInChildren<Transform>(true);
+        Transform Find(string n) { foreach (var t in all) if (t.name == n) return t; return null; }
+        var joints = new FingerJoint[15];
+        // the palm faces where the slightly curled rest fingers point, away from the line of the hand
+        Vector3 handDir = Vector3.zero, palm = Vector3.zero;
+        var mid = Find(prefix + "MiddleProximal");
+        if (mid == null) return null;
+        handDir = (mid.position - hand.position).normalized;
+        for (int f = 1; f < 5; f++)
+        {
+            var k = Find(prefix + FingerNames[f] + "Proximal"); var tip = Find(prefix + FingerNames[f] + "DistalEnd");
+            if (k && tip) palm += Vector3.ProjectOnPlane(tip.position - k.position, handDir);
+        }
+        palm.Normalize();
+        for (int f = 0; f < 5; f++)
+        {
+            var k = Find(prefix + FingerNames[f] + "Proximal"); var tip = Find(prefix + FingerNames[f] + "DistalEnd");
+            if (!k || !tip) return null;
+            Vector3 dir = (tip.position - k.position).normalized;
+            Vector3 axis = Vector3.Cross(dir, palm).normalized;
+            // make a positive angle bend the finger toward the palm
+            if (Vector3.Dot(Quaternion.AngleAxis(10f, axis) * dir, palm) < Vector3.Dot(dir, palm)) axis = -axis;
+            for (int j = 0; j < 3; j++)
+            {
+                var b = Find(prefix + FingerNames[f] + JointNames[j]);
+                if (!b || !b.parent) return null;
+                joints[f * 3 + j] = new FingerJoint { bone = b, restLocal = b.localRotation, axisInParent = Quaternion.Inverse(b.parent.rotation) * axis };
+            }
+        }
+        return joints;
+    }
+
+    void CurlFingers(FingerJoint[] joints, float[] curl)
+    {
+        if (joints == null || curl == null) return;
+        for (int f = 0; f < 5 && f < curl.Length; f++)
+            for (int j = 0; j < 3; j++)
+            {
+                var fj = joints[f * 3 + j];
+                if (fj.bone) fj.bone.localRotation = Quaternion.AngleAxis(curl[f] * JointShare[j], fj.axisInParent) * fj.restLocal;
+            }
     }
 
     /// <summary>After an animation update without IK: compare the IK goal with the real hand bone.</summary>
@@ -63,6 +121,8 @@ public class FirstPersonArms : MonoBehaviour
     void LateUpdate()
     {
         if (Application.isPlaying && !Calibrated) Calibrate();
+        CurlFingers(rightJoints, rightCurl);
+        CurlFingers(leftJoints, leftCurl);
     }
 
     void OnAnimatorIK(int layer)
@@ -113,21 +173,48 @@ public class FirstPersonArms : MonoBehaviour
                                           "tripo_part_30", "tripo_part_32", "tripo_part_39", "tripo_part_16",   // left
                                           "CG_ArmL", "CG_ArmR" };                                                 // high-poly model
 
+    static readonly System.Collections.Generic.Dictionary<GameObject, float> restHeights = new System.Collections.Generic.Dictionary<GameObject, float>();
+
+    static float RestHeight(Renderer[] rs)
+    {
+        Bounds b = rs[0].bounds; foreach (var r in rs) b.Encapsulate(r.bounds);
+        return b.size.y;
+    }
+
+    /// <summary>Height of a model in its rest pose at unit scale (measured once per prefab).</summary>
+    static float RestHeight(GameObject prefab)
+    {
+        if (restHeights.TryGetValue(prefab, out float h)) return h;
+        var tmp = Instantiate(prefab);
+        tmp.SetActive(true);
+        tmp.transform.localScale = prefab.transform.localScale;
+        h = RestHeight(tmp.GetComponentsInChildren<Renderer>(true));
+        tmp.SetActive(false);
+        if (Application.isPlaying) Destroy(tmp); else DestroyImmediate(tmp);
+        return restHeights[prefab] = h;
+    }
+
     /// <summary>Creates the arms under the camera: only the arm pieces are shown, all on the view-model layer.</summary>
     public static FirstPersonArms Spawn(GameObject characterPrefab, RuntimeAnimatorController controller, Avatar avatar,
-                                        Transform camera, int layer, float characterHeight, Vector3 shoulderTarget)
+                                        Transform camera, int layer, float characterHeight, Vector3 shoulderTarget, GameObject materialSource = null)
     {
         var go = Instantiate(characterPrefab, camera);
         go.name = "FirstPersonArms";
         go.transform.localPosition = Vector3.zero;
         go.transform.localRotation = Quaternion.identity;
 
-        // scale to the given height (measured in the rest pose before any animation runs)
+        // scale to the given height (measured in the rest pose before any animation runs);
+        // an arms-only model is scaled by the full character it was cut from
         var rs = go.GetComponentsInChildren<Renderer>(true);
-        Bounds b = rs[0].bounds; foreach (var r in rs) b.Encapsulate(r.bounds);
-        go.transform.localScale *= characterHeight / Mathf.Max(0.01f, b.size.y);
+        float h = materialSource != null ? RestHeight(materialSource) : RestHeight(rs);
+        go.transform.localScale *= characterHeight / Mathf.Max(0.01f, h);
 
         foreach (var t in go.GetComponentsInChildren<Transform>(true)) t.gameObject.layer = layer;
+        // the arms model imports without materials: take the character's own by renderer name
+        if (materialSource != null)
+            foreach (var src in materialSource.GetComponentsInChildren<Renderer>(true))
+                foreach (var r in rs)
+                    if (r.gameObject.name == src.gameObject.name) r.sharedMaterials = src.sharedMaterials;
         foreach (var r in rs)
         {
             bool keep = System.Array.IndexOf(ArmParts, r.gameObject.name) >= 0;
