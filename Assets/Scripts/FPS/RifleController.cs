@@ -60,7 +60,7 @@ public class WeaponProfile
     public float[] rightCurl = { 10f, 30f, 75f, 80f, 80f };
     public float[] leftCurl = { 10f, 70f, 70f, 70f, 70f };
 
-    [Header("Magazine and reload (0 = infinite ammo, no reload; children 'Magazine', 'MagTop', 'MagBottom')")]
+    [Header("Magazine and reload (0 = infinite ammo, no reload; children 'Magazine', 'MagTop', 'MagBottom'; empty reload: overhand rack of a 'Slide' or a palm on the 'BoltCatch')")]
     public int magazineSize = 0;
     public float reloadTime = 1.35f;        // tactical: mag out, new mag in, palm slap
     public float emptyReloadTime = 1.75f;   // empty: the same plus an overhand rack, slide locked back until then
@@ -68,6 +68,7 @@ public class WeaponProfile
     public Vector3 reloadPosition = new Vector3(-0.05f, 0.04f, -0.01f);
     public Vector3 reloadRotation = new Vector3(-18f, -8f, -32f);       // muzzle up, top rolled right so the mag well faces the support hand
     public AudioClip magOutClip, magInClip, slideReleaseClip;
+    public AudioClip grabClip, slapClip;                                 // hand goes for the new magazine; palm slap
 
     [Header("Arms")]
     [Tooltip("First-person arm scale for this weapon (0 = the controller's armsCharacterHeight)")]
@@ -134,8 +135,9 @@ public class RifleController : MonoBehaviour
     readonly List<int> ammo = new List<int>();
     float reloadT = -1f;
     bool reloadEmpty, slideLocked, magDropped, magSeated;
-    Transform mag, magRound, gripLeftMarker, leftHandTarget;
+    Transform mag, magRound, gripLeftMarker, leftHandTarget, boltCatch;
     Vector3 magRest, magBottomRest, magAxis;        // gun space; axis points out of the mag well
+    Quaternion magRestRot;
     Transform gun, muzzle, slide, barrel;
     Vector3 slideRest, barrelRest;          // in gun space
     float slideTime = 99f, draw;
@@ -203,7 +205,7 @@ public class RifleController : MonoBehaviour
         DetachEffects();
         if (gun) Destroy(gun.gameObject);
         if (arms) Destroy(arms.gameObject);
-        gun = muzzle = slide = barrel = mag = magRound = gripLeftMarker = leftHandTarget = null; arms = null;
+        gun = muzzle = slide = barrel = mag = magRound = gripLeftMarker = leftHandTarget = boltCatch = null; arms = null;
         current = -1;
         reloadT = -1f;
         Aim = 0f;
@@ -246,11 +248,13 @@ public class RifleController : MonoBehaviour
         if (mag && magTop && magBottom)
         {
             magRest = gun.InverseTransformPoint(mag.position);
+            magRestRot = mag.localRotation;
             magBottomRest = gun.InverseTransformPoint(magBottom.position);
             magAxis = (magBottomRest - gun.InverseTransformPoint(magTop.position)).normalized;
         }
         else mag = null;
         magRound = mag ? FindDeep(mag, "MagRound") : null;
+        boltCatch = FindDeep(gun, "BoltCatch");
         if (magRound) magRound.gameObject.SetActive(false);       // only seen while the magazine is out of the grip
         reloadT = -1f;
         slideLocked = w.magazineSize > 0 && w.lockSlideWhenEmpty && ammo[current] == 0;
@@ -477,6 +481,7 @@ public class RifleController : MonoBehaviour
     const float NewMagStartDistance = 0.2f, NearDistance = 0.03f;
     static readonly float[] MagHoldCurl = { 20f, 45f, 45f, 45f, 45f };      // fingers around the new magazine
     static readonly float[] RackCurl = { 15f, 80f, 80f, 80f, 75f };         // gripping the rear of the slide
+    static readonly float[] SlapCurl = { 5f, 8f, 8f, 10f, 12f };            // flat hand on the bolt catch
 
     /// <summary>Starts a reload of the held weapon (R, or the trigger on an empty magazine).</summary>
     public void StartReload()
@@ -506,18 +511,31 @@ public class RifleController : MonoBehaviour
         float t = reloadT, total = reloadEmpty ? w.emptyReloadTime : w.reloadTime;
         float unit = 1f / Mathf.Max(0.0001f, w.scale);
 
-        // ---- gun pose: tilt in, palm-slap bump, rack tug, tilt out ----
-        float weight = Smooth(Mathf.Clamp01(t / 0.2f)) * Smooth(Mathf.Clamp01((total - t) / 0.3f));
+        // ---- gun pose: tilt in (overshoots and settles), tug as the mag comes out, knocked up by the new mag,
+        //      a slow hand drift throughout, tilt out with a small settle ----
+        float weight = BackOut(Mathf.Clamp01(t / 0.24f)) * BackOut(Mathf.Clamp01((total - t) / 0.32f));
         pos = w.reloadPosition * weight;
         rot = w.reloadRotation * weight;
-        float slap = Bump(t, MagSeat - 0.02f, 0.16f);
-        pos += new Vector3(0f, 0.012f, 0f) * slap; rot += new Vector3(-5f, 0f, -3f) * slap;
-        if (reloadEmpty)
+        rot += new Vector3(Mathf.Sin(t * 5.3f) * 1.4f, Mathf.Sin(t * 3.7f + 1f) * 1.2f, Mathf.Sin(t * 4.4f + 2f) * 2.2f) * weight;
+        float tugOut = Bump(t, MagRelease, 0.14f);
+        pos += new Vector3(0.004f, 0.01f, 0f) * tugOut; rot += new Vector3(-3f, 0f, 5f) * tugOut;      // mag pulled down: gun pulled with it, then rebounds
+        float slap = Bump(t, MagSeat - 0.03f, 0.13f);
+        float ring = Wobble(t, MagSeat, 13f, 0.12f);
+        pos += new Vector3(0f, 0.02f, 0f) * slap + new Vector3(0f, 0.004f, 0f) * ring;
+        rot += new Vector3(-8f, 0f, -5f) * slap + new Vector3(-1.5f, 0f, 2.5f) * ring;
+        if (reloadEmpty && slide)
         {
             float rack = Smooth(Mathf.Clamp01((t - MagSeat) / 0.15f)) * Smooth(Mathf.Clamp01((total - 0.35f - t) / 0.2f));
             rot += new Vector3(-4f, -10f, 14f) * rack;                          // turned further so the hand can come over the top
             float tug = Bump(t, RackRelease - 0.06f, 0.12f);
             pos += new Vector3(0f, 0f, 0.025f) * tug;                            // gun pushed forward against the rack
+        }
+        else if (reloadEmpty && boltCatch)
+        {
+            float turn = Smooth(Mathf.Clamp01((t - MagSeat) / 0.15f)) * Smooth(Mathf.Clamp01((total - 0.3f - t) / 0.25f));
+            rot += new Vector3(-3f, 6f, 10f) * turn;                             // rolled back a little: the left side faces the hand
+            float hit = Bump(t, RackRelease - 0.02f, 0.14f);
+            pos += new Vector3(0.012f, 0.004f, 0f) * hit; rot += new Vector3(0f, 0f, -4f) * hit;     // the palm knocks the gun right
         }
 
         // ---- magazines ----
@@ -529,6 +547,7 @@ public class RifleController : MonoBehaviour
         else if (t < MagNear) { float u = (t - MagNewStart) / (MagNear - MagNewStart); u = 1f - (1f - u) * (1f - u); d = Mathf.Lerp(NewMagStartDistance, NearDistance, u); }
         else if (t < MagSeat) d = Mathf.Lerp(NearDistance, 0f, Smooth((t - MagNear) / (MagSeat - MagNear)));
         if (prev < MagRelease && t >= MagRelease) Play(w.magOutClip, 0.6f);
+        if (prev < 0.26f && t >= 0.26f) Play(w.grabClip, 0.5f);
         if (prev < MagDrop && t >= MagDrop && !magDropped) { DropMagazine(w); magDropped = true; }
         if (t >= MagDrop - 0.0001f && t < MagNewStart + 0.02f) magVisible = false;    // the old mag is gone, the new one is still off screen
         if (!magSeated && t >= MagSeat)
@@ -536,22 +555,29 @@ public class RifleController : MonoBehaviour
             magSeated = true;
             ammo[current] = reloadEmpty ? w.magazineSize : w.magazineSize + 1;
             Play(w.magInClip, 0.7f);
+            Play(w.slapClip, 0.45f);
+            if (player) player.AddRecoil(0.5f, Random.Range(-0.2f, 0.2f), 0f);
         }
+        // the new magazine swings in from the support side, tilted, and straightens as it enters the well
+        float approach = t >= MagNewStart && t < MagSeat ? 1f - Smooth(Mathf.Clamp01((t - MagNewStart) / (MagNear - MagNewStart + 0.04f))) : 0f;
+        Vector3 swingIn = new Vector3(-0.07f, -0.02f, -0.03f) * (approach * approach * unit);
         if (mag)
         {
             mag.gameObject.SetActive(magVisible);
-            mag.position = gun.TransformPoint(magRest + magAxis * (d * unit));
+            mag.position = gun.TransformPoint(magRest + magAxis * (d * unit) + swingIn);
+            mag.localRotation = magRestRot * Quaternion.Euler(0f, 0f, -25f * approach * approach);
             if (magRound) magRound.gameObject.SetActive(d > 0.004f);
         }
-        Vector3 magHand = magBottomRest + magAxis * (Mathf.Max(d, t < MagNewStart ? NewMagStartDistance : 0f) * unit);
+        Vector3 magHand = magBottomRest + magAxis * (Mathf.Max(d, t < MagNewStart ? NewMagStartDistance : 0f) * unit) + swingIn;
 
         // ---- support hand: grip -> new mag -> (slide) -> grip ----
         float toMag = Smooth(Mathf.Clamp01((t - 0.12f) / 0.22f));
         float back = reloadEmpty ? Smooth(Mathf.Clamp01((t - (RackRelease + 0.04f)) / 0.2f)) : Smooth(Mathf.Clamp01((t - (MagSeat + 0.02f)) / 0.22f));
         Vector3 target = Vector3.Lerp(handPos, magHand, toMag);
+        target += new Vector3(-0.05f, -0.07f, -0.02f) * (Mathf.Sin(Mathf.PI * toMag) * unit);         // dips out and down toward the pouch
         Vector3 fingers = Vector3.Lerp(w.leftFingers.normalized, new Vector3(0.15f, 0.35f, 1f).normalized, toMag);
         Vector3 palm = Vector3.Lerp(w.leftPalm.normalized, new Vector3(0.2f, 1f, 0f).normalized, toMag);   // palm up under the floor plate
-        if (reloadEmpty && slide)
+        if (reloadEmpty && slide && !boltCatch)
         {
             // overhand: palm down on the rear of the slide, fingers across it
             float over = Smooth(Mathf.Clamp01((t - (MagSeat + 0.02f)) / (RackReach - MagSeat - 0.02f)));
@@ -566,24 +592,41 @@ public class RifleController : MonoBehaviour
                 Play(w.slideReleaseClip, 0.8f);
             }
         }
+        else if (reloadEmpty && boltCatch)
+        {
+            // flat palm slaps the bolt catch on the left of the receiver, fingers forward
+            float over = Smooth(Mathf.Clamp01((t - (MagSeat + 0.02f)) / (RackReach - MagSeat - 0.02f)));
+            Vector3 catchPos = gun.InverseTransformPoint(boltCatch.position) + new Vector3(-0.03f, -0.01f, -0.005f) * unit;
+            float hit = Bump(t, RackRelease - 0.04f, 0.1f);
+            target = Vector3.Lerp(target, catchPos + new Vector3(0.015f, 0f, 0f) * (hit * unit), over);
+            fingers = Vector3.Lerp(fingers, new Vector3(0.1f, 0.25f, 1f).normalized, over);
+            palm = Vector3.Lerp(palm, new Vector3(1f, 0f, 0f), over);
+            if (prev < RackRelease && t >= RackRelease)
+            {
+                slideLocked = false;
+                Play(w.slideReleaseClip, 0.8f);
+                if (player) player.AddRecoil(0.7f, Random.Range(-0.3f, 0.3f), 0f);
+            }
+        }
         else if (prev < MagSeat + 0.05f && t >= MagSeat + 0.05f && slideLocked) { slideLocked = false; slideTime = w.slideBackTime; Play(w.slideReleaseClip, 0.8f); }
         target = Vector3.Lerp(target, handPos, back);
+        target += new Vector3(-0.03f, -0.03f, 0f) * (Mathf.Sin(Mathf.PI * back) * unit);
         fingers = Vector3.Lerp(fingers, w.leftFingers.normalized, back);
         palm = Vector3.Lerp(palm, w.leftPalm.normalized, back);
         if (leftHandTarget) { leftHandTarget.position = gun.TransformPoint(target); leftHandTarget.rotation = gun.rotation; }
         if (arms)
         {
             arms.leftFingers = fingers; arms.leftPalm = palm;
-            float overW = reloadEmpty ? Smooth(Mathf.Clamp01((t - (MagSeat + 0.02f)) / (RackReach - MagSeat - 0.02f))) * (1f - back) : 0f;
+            float overW = reloadEmpty && (slide || boltCatch) ? Smooth(Mathf.Clamp01((t - (MagSeat + 0.02f)) / (RackReach - MagSeat - 0.02f))) * (1f - back) : 0f;
             float magW = toMag * (1f - back) * (1f - overW);
             for (int i = 0; i < 5 && w.leftCurl != null && i < w.leftCurl.Length; i++)
-                arms.leftCurl[i] = w.leftCurl[i] * (1f - magW - overW) + MagHoldCurl[i] * magW + RackCurl[i] * overW;
+                arms.leftCurl[i] = w.leftCurl[i] * (1f - magW - overW) + MagHoldCurl[i] * magW + (boltCatch ? SlapCurl[i] : RackCurl[i]) * overW;
         }
 
         if (t >= total)
         {
             reloadT = -1f;
-            if (mag) { mag.gameObject.SetActive(true); mag.position = gun.TransformPoint(magRest); }
+            if (mag) { mag.gameObject.SetActive(true); mag.position = gun.TransformPoint(magRest); mag.localRotation = magRestRot; }
             if (magRound) magRound.gameObject.SetActive(false);
         }
     }
@@ -614,6 +657,21 @@ public class RifleController : MonoBehaviour
         if (!clip) return;
         audio2D.pitch = Random.Range(0.96f, 1.04f);
         audio2D.PlayOneShot(clip, volume);
+    }
+
+    /// <summary>Ease out that overshoots by ~6% and settles (0 -> 1).</summary>
+    static float BackOut(float u)
+    {
+        const float c = 1.2f;
+        u -= 1f;
+        return 1f + (c + 1f) * u * u * u + c * u * u;
+    }
+
+    /// <summary>Damped oscillation after t0 (starts at 0).</summary>
+    static float Wobble(float t, float t0, float freq, float decay)
+    {
+        float u = t - t0;
+        return u <= 0f ? 0f : Mathf.Sin(u * freq * 2f * Mathf.PI) * Mathf.Exp(-u / decay);
     }
 
     /// <summary>0 -> 1 -> 0 hump starting at t0, lasting len seconds.</summary>

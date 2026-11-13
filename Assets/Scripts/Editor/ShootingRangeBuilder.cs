@@ -12,7 +12,10 @@ using UnityEngine;
 public static class ShootingRangeBuilder
 {
     const string ScenePath = "Assets/Scenes/ShootingRange.unity";
-    const string RiflePath = "Assets/Weapons/AssaultRifle/AssaultRifle.fbx";
+    const string OldRiflePath = "Assets/Weapons/AssaultRifle/AssaultRifle.fbx";
+    const string CarbinePath = "Assets/Weapons/Carbine/Carbine.fbx";           // ArtSource/Weapons/Carbine/carbine_prep.py
+    const string CarbineTextures = "Assets/Weapons/Carbine/Textures";
+    static string RiflePath => File.Exists(CarbinePath) ? CarbinePath : OldRiflePath;
     const string GlockPath = "Assets/Weapons/Glock19/Glock19.fbx";
     const string GlockTextures = "Assets/Weapons/Glock19/Textures";
     public const string FPArmsPath = "Assets/Characters/CatGirl/CatGirl_FPArms.fbx";   // ArtSource/CatGirl/scripts/fp_arms.py
@@ -28,6 +31,7 @@ public static class ShootingRangeBuilder
         EnsureLayer(ViewModelLayer, "ViewModel");
         ConfigureRifleImport();
         ConfigureGlockImport();
+        ConfigureCarbineImport();
         ConfigureArmsImport();
 
         var scene = EditorSceneManager.NewScene(NewSceneSetup.DefaultGameObjects, NewSceneMode.Single);
@@ -79,8 +83,7 @@ public static class ShootingRangeBuilder
             r.transform.rotation = Quaternion.LookRotation(Vector3.right, Vector3.back);
             var b = Bounds(r);
             r.transform.position += new Vector3(desk.position.x - b.center.x, desk.position.y + 0.95f - b.min.y, desk.position.z - b.center.z);
-            var mr = r.GetComponentInChildren<MeshRenderer>();
-            var col = mr.gameObject.AddComponent<BoxCollider>();
+            var col = RifleController.AddBoundsCollider(r);
             col.size = Vector3.Scale(col.size, new Vector3(1.4f, 1.4f, 1.05f));
             r.AddComponent<WeaponPickup>();
         }
@@ -172,7 +175,7 @@ public static class ShootingRangeBuilder
         rifle.player = fpc; rifle.mainCamera = cam; rifle.viewModelCamera = vmCam;
         rifle.weaponRoot = weaponRoot;
         var shots = new[] { Clip("Gunshot_1"), Clip("Gunshot_2"), Clip("Gunshot_3") };
-        rifle.weapons = new System.Collections.Generic.List<WeaponProfile> { RifleProfile(riflePrefab, shots), GlockProfile(glockPrefab, shots) };
+        rifle.weapons = new System.Collections.Generic.List<WeaponProfile> { RiflePath == CarbinePath ? CarbineProfile(riflePrefab, shots) : RifleProfile(riflePrefab, shots), GlockProfile(glockPrefab, shots) };
         rifle.targetHitClip = Clip("TargetHit");
         rifle.impactClip = Clip("Impact");
         rifle.pickupClip = Clip("Pickup");
@@ -552,6 +555,28 @@ public static class ShootingRangeBuilder
         displayName = "Assault Rifle", prefab = prefab, scale = 0.85f, shotClips = shots,
     };
 
+    // the segmented carbine (real size, 30-round magazine, angled foregrip, holo sight); CS / CoD-style hold:
+    // big in the lower right, support hand far forward on the handguard
+    public static WeaponProfile CarbineProfile(GameObject prefab, AudioClip[] shots) => new WeaponProfile
+    {
+        displayName = "Assault Rifle", prefab = prefab, scale = 1f, shotClips = shots,
+        hipPosition = new Vector3(0.10f, -0.072f, 0.30f), hipRotation = new Vector3(1f, -8f, -7f),
+        aimPosition = new Vector3(0f, 0f, 0.34f),
+        viewModelHipFov = 50f, viewModelAimFov = 40f,
+        rightFingers = new Vector3(-0.15f, -0.55f, 0.8f), rightPalm = new Vector3(-1f, 0f, 0f), rightElbowHint = new Vector3(0.45f, -0.55f, 0.05f),
+        // C-clamp: support hand under the handguard, palm up, fingers up the far side, thumb over the top
+        leftFingers = new Vector3(0.4f, 0.1f, 0.9f), leftPalm = new Vector3(0.45f, 1f, 0f), leftElbowHint = new Vector3(-0.5f, -0.6f, 0.25f),
+        rightCurl = new[] { 10f, 30f, 75f, 80f, 80f },
+        leftCurl = new[] { 50f, 60f, 65f, 65f, 65f },
+        armsHeight = 2.2f,                       // life-size hands were 1.6x at the controller's 2.8 m
+        magazineSize = 30, reloadTime = 1.6f, emptyReloadTime = 2.0f, lockSlideWhenEmpty = true,
+        // CoD-style: rifle lifted, muzzle up and left, rolled so the magazine well faces the support hand
+        reloadPosition = new Vector3(-0.06f, 0.135f, 0.04f), reloadRotation = new Vector3(-26f, -12f, -24f),
+        magOutClip = Clip("Reload_RifleMagOut"), magInClip = Clip("Reload_RifleMagIn"), slideReleaseClip = Clip("Reload_RifleBoltRelease"),
+        grabClip = Clip("Reload_Grab"), slapClip = Clip("Reload_Slap"),
+        mass = 3.2f,
+    };
+
     // semi-auto pistol: snappier kick, smaller flash, animated slide
     static WeaponProfile GlockProfile(GameObject prefab, AudioClip[] shots) => new WeaponProfile
     {
@@ -576,8 +601,9 @@ public static class ShootingRangeBuilder
         leftCurl = new[] { 0f, 75f, 80f, 80f, 80f },
         armsHeight = 2.0f,                       // smaller hands than the rifle's stretched arms, the pistol stays visible
         magazineSize = 15, reloadTime = 1.35f, emptyReloadTime = 1.75f, lockSlideWhenEmpty = true,
-        // placeholder handling sounds from the existing range clips (no recorded pistol foley yet)
-        magOutClip = Clip("Pickup"), magInClip = Clip("Impact"), slideReleaseClip = Clip("Pickup"),
+        // synthesised foley (ArtSource/Audio/make_reload_sounds.py)
+        magOutClip = Clip("Reload_PistolMagOut"), magInClip = Clip("Reload_PistolMagIn"), slideReleaseClip = Clip("Reload_PistolSlideRelease"),
+        grabClip = Clip("Reload_Grab"), slapClip = Clip("Reload_Slap"),
         mass = 0.7f,
     };
 
@@ -616,6 +642,37 @@ public static class ShootingRangeBuilder
         imp.SaveAndReimport();
     }
 
+    /// <summary>Carbine (from ArtSource/Weapons/Carbine/carbine_prep.py): one material on the baked 4K atlas.</summary>
+    static void ConfigureCarbineImport()
+    {
+        var imp = AssetImporter.GetAtPath(CarbinePath) as ModelImporter;
+        if (imp == null) return;
+        foreach (var (name, normal) in new[] { ("BaseColor", false), ("Normal", true) })
+        {
+            if (!(AssetImporter.GetAtPath($"{CarbineTextures}/Carbine_{name}.png") is TextureImporter ti)) continue;
+            bool changed = false;
+            if (normal && ti.textureType != TextureImporterType.NormalMap) { ti.textureType = TextureImporterType.NormalMap; changed = true; }
+            if (ti.maxTextureSize != 4096) { ti.maxTextureSize = 4096; changed = true; }
+            if (ti.anisoLevel < 8) { ti.anisoLevel = 8; changed = true; }
+            if (changed) ti.SaveAndReimport();
+        }
+        string matPath = "Assets/Weapons/Carbine/Carbine.mat";
+        var mat = AssetDatabase.LoadAssetAtPath<Material>(matPath);
+        var shader = UnityEngine.Rendering.GraphicsSettings.currentRenderPipeline != null ? Shader.Find("Universal Render Pipeline/Lit") : Shader.Find("Standard");
+        if (mat == null) { mat = new Material(shader); AssetDatabase.CreateAsset(mat, matPath); }
+        mat.shader = shader;
+        mat.color = Color.white;
+        Texture2D T(string n) => AssetDatabase.LoadAssetAtPath<Texture2D>($"{CarbineTextures}/Carbine_{n}.png");
+        mat.SetTexture("_BaseMap", T("BaseColor")); mat.mainTexture = T("BaseColor");
+        mat.SetTexture("_BumpMap", T("Normal")); mat.EnableKeyword("_NORMALMAP");
+        mat.SetFloat("_Metallic", 0.35f); mat.SetFloat("_Smoothness", 0.42f);
+        EditorUtility.SetDirty(mat);
+        imp.animationType = ModelImporterAnimationType.None;
+        imp.materialImportMode = ModelImporterMaterialImportMode.ImportStandard;
+        imp.AddRemap(new AssetImporter.SourceAssetIdentifier(typeof(Material), "Carbine"), mat);
+        imp.SaveAndReimport();
+    }
+
     /// <summary>First-person arms copy: humanoid with the character's own bone mapping, no materials (taken from the character at runtime).</summary>
     public static void ConfigureArmsImport()
     {
@@ -634,15 +691,15 @@ public static class ShootingRangeBuilder
 
     static void ConfigureRifleImport()
     {
-        var imp = AssetImporter.GetAtPath(RiflePath) as ModelImporter;
+        var imp = AssetImporter.GetAtPath(OldRiflePath) as ModelImporter;
         if (imp == null) return;
-        string texDir = Path.GetDirectoryName(RiflePath) + "/Textures";
+        string texDir = Path.GetDirectoryName(OldRiflePath) + "/Textures";
         if (!Directory.Exists(texDir) || Directory.GetFiles(texDir).Length == 0)
         {
             Directory.CreateDirectory(texDir);
             imp.ExtractTextures(texDir);
             AssetDatabase.Refresh();
-            imp = (ModelImporter)AssetImporter.GetAtPath(RiflePath);
+            imp = (ModelImporter)AssetImporter.GetAtPath(OldRiflePath);
         }
         imp.animationType = ModelImporterAnimationType.None;
         imp.materialImportMode = ModelImporterMaterialImportMode.ImportViaMaterialDescription;

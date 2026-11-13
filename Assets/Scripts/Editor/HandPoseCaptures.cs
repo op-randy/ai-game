@@ -84,7 +84,7 @@ public static class HandPoseCaptures
                     Save("glock-aim"); Close("glock-aim-close");
                     rc.forcedAim = -1f; wait = 25; break;
                 case 3:
-                    for (int i = 0; i < 3; i++) typeof(RifleController).GetMethod("Fire", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic).Invoke(rc, null);
+                    for (int i = 0; i < 3; i++) FireOnce();
                     rc.StartReload(); sub = 0; break;
                 case 4:
                     sub++;
@@ -98,12 +98,38 @@ public static class HandPoseCaptures
                     rc.forcedAim = 1f; wait = 25; break;
                 case 6:
                     Save("rifle-aim");
+                    rc.forcedAim = -1f; wait = 25; break;
+                case 7:
+                    if (rc.Ammo < 0) { step = 11; break; }               // old rifle without a magazine
+                    for (int i = 0; i < 3; i++) FireOnce();
+                    rc.StartReload(); sub = 0; break;
+                case 8:
+                    sub++;
+                    if (sub == 12) Save("rifle-reload-tilt");
+                    if (sub == 22) Save("rifle-reload-magout");
+                    if (sub == 36) { Save("rifle-reload-newmag"); ThreeQuarter("rifle-reload-newmag-3q"); }
+                    if (sub == 52) Save("rifle-reload-seat");
+                    if (sub < 110) { step--; break; }
+                    wait = 10; break;
+                case 9:
+                    while (rc.Ammo > 0) FireOnce();
+                    rc.StartReload(); sub = 0; break;
+                case 10:
+                    sub++;
+                    if (sub == 60) Save("rifle-empty-reach");
+                    if (sub == 67) { Save("rifle-empty-slap"); LeftSide("rifle-empty-slap-left"); }
+                    if (sub < 130) { step--; break; }
+                    Debug.Log($"HandPoseCaptures: rifle ammo after the empty reload {rc.Ammo}");
+                    break;
+                case 11:
                     Debug.Log("HandPoseCaptures: DONE (images in Logs/pose-*.png; quality NOT judged by this tool)");
                     Finish(0); break;
             }
         }
         catch (Exception e) { Debug.LogException(e); Finish(1); }
     }
+
+    static void FireOnce() => typeof(RifleController).GetMethod("Fire", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic).Invoke(rc, null);
 
     static Camera Temp(out GameObject go)
     {
